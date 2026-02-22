@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: theme("fontFamily.mono");
+  background: radial-gradient(1200px 700px at 20% 0%, rgba(24, 255, 93, 0.08), transparent 60%),
+    radial-gradient(1000px 600px at 80% 20%, rgba(24, 255, 93, 0.06), transparent 55%),
+    #0b0f0c;
+  color: #d9ffe4;
+}
+
+/* subtle scanline overlay */
+.scanlines::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.09;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.05),
+    rgba(255, 255, 255, 0.05) 1px,
+    rgba(0, 0, 0, 0) 3px,
+    rgba(0, 0, 0, 0) 6px
+  );
+}
+

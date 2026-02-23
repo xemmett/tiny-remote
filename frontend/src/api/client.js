@@ -22,6 +22,8 @@ export const api = {
   mouseMoveRelative: (dx, dy, duration = 0) => request('POST', '/mouse/move/relative', { dx, dy, duration }),
   mouseClick: (button = 'left', x = null, y = null, clicks = 1) =>
     request('POST', '/mouse/click', { button, x, y, clicks }),
+  mouseDown: (button = 'left') => request('POST', '/mouse/down', { button }),
+  mouseUp: (button = 'left') => request('POST', '/mouse/up', { button }),
   mouseScroll: (amount, x = null, y = null) => request('POST', '/mouse/scroll', { amount, x, y }),
   mousePosition: () => request('GET', '/mouse/position'),
   mouseDrag: (x, y, button = 'left', duration = 0) =>
@@ -41,6 +43,11 @@ export const api = {
 
   // Media
   mediaPlayPause: () => request('POST', '/media/playpause'),
+  mediaNext: () => request('POST', '/media/next'),
+  mediaPrev: () => request('POST', '/media/prev'),
+
+  // Apps
+  appsLaunch: (app) => request('POST', '/apps/launch', { app }),
 
   // Power
   powerLock: () => request('POST', '/power/lock'),

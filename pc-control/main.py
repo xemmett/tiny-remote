@@ -6,6 +6,7 @@ import asyncio
 import os
 import platform
 import subprocess
+import webbrowser
 from contextlib import asynccontextmanager
 
 import pyautogui
@@ -23,12 +24,84 @@ if WINDOWS:
         _HAS_PYCAW = True
     except Exception:
         _HAS_PYCAW = False
-    # Windows mouse wheel and media keys: use native API
+    # Windows mouse wheel, media keys, and Unicode typing: use native API
     import ctypes
+    from ctypes import wintypes
     MOUSEEVENTF_WHEEL = 0x0800
     WHEEL_DELTA = 120  # one notch
     KEYEVENTF_KEYUP = 0x0002
+    KEYEVENTF_UNICODE = 0x0004
     VK_MEDIA_PLAY_PAUSE = 0xB3
+    VK_MEDIA_NEXT_TRACK = 0xB0
+    VK_MEDIA_PREV_TRACK = 0xB1
+    INPUT_KEYBOARD = 1
+    # SendInput structures for Unicode typing (apostrophes, quotes, etc.)
+    if not hasattr(wintypes, "ULONG_PTR"):
+        wintypes.ULONG_PTR = ctypes.c_size_t
+    class _KEYBDINPUT(ctypes.Structure):
+        _fields_ = (
+            ("wVk", wintypes.WORD),
+            ("wScan", wintypes.WORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", wintypes.ULONG_PTR),
+        )
+    class _MOUSEINPUT(ctypes.Structure):
+        _fields_ = (
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", wintypes.ULONG_PTR),
+        )
+    class _HARDWAREINPUT(ctypes.Structure):
+        _fields_ = (
+            ("uMsg", wintypes.DWORD),
+            ("wParamL", wintypes.WORD),
+            ("wParamH", wintypes.WORD),
+        )
+    class _INPUT_UNION(ctypes.Union):
+        _fields_ = (("ki", _KEYBDINPUT), ("mi", _MOUSEINPUT), ("hi", _HARDWAREINPUT))
+    class _INPUT(ctypes.Structure):
+        _fields_ = (("type", wintypes.DWORD), ("union", _INPUT_UNION))
+
+    # CMD-safe: map curly/smart quotes and apostrophes to ASCII so Windows CMD accepts them
+    _QUOTE_NORMALIZE = str.maketrans({
+        "\u2018": "'",   # LEFT SINGLE QUOTATION MARK
+        "\u2019": "'",   # RIGHT SINGLE QUOTATION MARK
+        "\u201a": "'",   # SINGLE LOW-9 QUOTATION MARK
+        "\u201b": "'",   # SINGLE HIGH-REVERSED-9 QUOTATION MARK
+        "\u2032": "'",   # PRIME (′)
+        "\u201c": '"',   # LEFT DOUBLE QUOTATION MARK
+        "\u201d": '"',   # RIGHT DOUBLE QUOTATION MARK
+        "\u201e": '"',   # DOUBLE LOW-9 QUOTATION MARK
+        "\u201f": '"',   # DOUBLE HIGH-REVERSED-9 QUOTATION MARK
+        "\u2033": '"',   # DOUBLE PRIME (″)
+    })
+
+    def _type_text_windows(text: str, interval: float = 0.0) -> None:
+        """Type a string using SendInput KEYEVENTF_UNICODE. Normalizes quotes to ASCII for CMD."""
+        import time
+        text = text.translate(_QUOTE_NORMALIZE)
+        user32 = ctypes.windll.user32
+        for c in text:
+            o = ord(c)
+            if o <= 0xFFFF:
+                code_units = [o]
+            else:
+                # UTF-16 surrogate pair for characters beyond BMP (e.g. emoji)
+                o -= 0x10000
+                code_units = [0xD800 + (o // 0x400), 0xDC00 + (o % 0x400)]
+            for w_scan in code_units:
+                ki_down = _KEYBDINPUT(0, w_scan, KEYEVENTF_UNICODE, 0, 0)
+                ki_up = _KEYBDINPUT(0, w_scan, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, 0)
+                inp_down = _INPUT(INPUT_KEYBOARD, _INPUT_UNION(ki=ki_down))
+                inp_up = _INPUT(INPUT_KEYBOARD, _INPUT_UNION(ki=ki_up))
+                user32.SendInput(1, ctypes.byref(inp_down), ctypes.sizeof(_INPUT))
+                user32.SendInput(1, ctypes.byref(inp_up), ctypes.sizeof(_INPUT))
+            if interval > 0:
+                time.sleep(interval)
 else:
     _HAS_PYCAW = False
 
@@ -63,6 +136,9 @@ class MouseDrag(BaseModel):
     button: str = Field("left", description="left or right")
     duration: float = Field(0.0, ge=0)
 
+class MouseButton(BaseModel):
+    button: str = Field("left", description="left, right, or middle")
+
 class KeyboardPress(BaseModel):
     key: str = Field(..., description="Key name, e.g. enter, tab, space, a, ctrl")
 
@@ -84,6 +160,9 @@ class PowerShutdown(BaseModel):
 
 class PowerRestart(BaseModel):
     delay_seconds: int = Field(0, ge=0, le=3600)
+
+class AppLaunch(BaseModel):
+    app: str = Field(..., description="One of: browser, spotify, jellyfin, youtube")
 
 
 def _get_volume_interface():
@@ -156,6 +235,18 @@ async def mouse_click(body: MouseClick):
         pyautogui.click(button=body.button, clicks=body.clicks, interval=body.interval)
     return {"ok": True}
 
+@app.post("/mouse/down")
+async def mouse_down(body: MouseButton):
+    """Hold mouse button down (for drag/select)."""
+    pyautogui.mouseDown(button=body.button)
+    return {"ok": True}
+
+@app.post("/mouse/up")
+async def mouse_up(body: MouseButton):
+    """Release mouse button."""
+    pyautogui.mouseUp(button=body.button)
+    return {"ok": True}
+
 def _scroll_windows(amount: int, x: int | None = None, y: int | None = None) -> None:
     """Scroll on Windows using mouse_event (pyautogui.scroll is unreliable on Windows)."""
     if x is None or y is None:
@@ -204,6 +295,15 @@ async def mouse_ws(ws: WebSocket):
     try:
         while True:
             data = await ws.receive_json()
+            scroll = data.get("scroll")
+            if scroll is not None:
+                amount = int(scroll)
+                if amount:
+                    if WINDOWS:
+                        _scroll_windows(amount)
+                    else:
+                        pyautogui.scroll(amount)
+                continue
             dx = float(data.get("dx", 0))
             dy = float(data.get("dy", 0))
             smooth_x = alpha * dx + (1.0 - alpha) * smooth_x
@@ -231,8 +331,11 @@ async def keyboard_press(body: KeyboardPress):
 
 @app.post("/keyboard/type")
 async def keyboard_type(body: KeyboardType):
-    """Type a string with optional delay between keys."""
-    pyautogui.write(body.text, interval=body.interval)
+    """Type a string with optional delay between keys. On Windows uses SendInput Unicode for apostrophes, quotes, etc."""
+    if WINDOWS:
+        _type_text_windows(body.text, body.interval)
+    else:
+        pyautogui.write(body.text, interval=body.interval)
     return {"ok": True}
 
 @app.post("/keyboard/hotkey")
@@ -279,9 +382,28 @@ async def media_playpause():
     """Send media Play/Pause key (toggle). Windows only."""
     if not WINDOWS:
         raise HTTPException(status_code=501, detail="Media keys are only available on Windows.")
-    # keybd_event(bVk, bScan, dwFlags, dwExtraInfo): press then release
     ctypes.windll.user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, 0, 0)
     ctypes.windll.user32.keybd_event(VK_MEDIA_PLAY_PAUSE, 0, KEYEVENTF_KEYUP, 0)
+    return {"ok": True}
+
+
+@app.post("/media/next")
+async def media_next():
+    """Send media Next Track key (fast forward). Windows only."""
+    if not WINDOWS:
+        raise HTTPException(status_code=501, detail="Media keys are only available on Windows.")
+    ctypes.windll.user32.keybd_event(VK_MEDIA_NEXT_TRACK, 0, 0, 0)
+    ctypes.windll.user32.keybd_event(VK_MEDIA_NEXT_TRACK, 0, KEYEVENTF_KEYUP, 0)
+    return {"ok": True}
+
+
+@app.post("/media/prev")
+async def media_prev():
+    """Send media Previous Track key (rewind). Windows only."""
+    if not WINDOWS:
+        raise HTTPException(status_code=501, detail="Media keys are only available on Windows.")
+    ctypes.windll.user32.keybd_event(VK_MEDIA_PREV_TRACK, 0, 0, 0)
+    ctypes.windll.user32.keybd_event(VK_MEDIA_PREV_TRACK, 0, KEYEVENTF_KEYUP, 0)
     return {"ok": True}
 
 
@@ -340,6 +462,46 @@ async def power_cancel():
     return {"ok": True}
 
 
+# --- Apps / Programs ---
+
+def _launch_app_sync(app: str) -> None:
+    """Launch app or URL in default browser. Runs in thread to avoid blocking."""
+    app = app.strip().lower()
+    if app == "browser":
+        webbrowser.open("https://www.google.com")
+    elif app == "youtube":
+        webbrowser.open("https://www.youtube.com")
+    elif app == "jellyfin":
+        webbrowser.open("http://localhost:8096")
+    elif app == "spotify":
+        # Use spotify: protocol (opens app if installed) or fallback to start command on Windows
+        try:
+            webbrowser.open("spotify:")
+        except Exception:
+            if WINDOWS:
+                subprocess.Popen(
+                    ["cmd", "/c", "start", "spotify"],
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    shell=False,
+                )
+            else:
+                subprocess.Popen(["spotify"] if os.path.exists("/usr/bin/spotify") else ["xdg-open", "spotify:"])
+    else:
+        raise ValueError(f"Unknown app: {app}. Use: browser, spotify, jellyfin, youtube")
+
+
+@app.post("/apps/launch")
+async def apps_launch(body: AppLaunch):
+    """Launch an app: browser (new tab), Spotify, Jellyfin (browser), or YouTube (browser)."""
+    try:
+        await asyncio.to_thread(_launch_app_sync, body.app)
+        return {"ok": True, "app": body.app}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Info ---
 
 @app.get("/")
@@ -348,11 +510,12 @@ async def root():
         "name": "Tiny Remote",
         "docs": "/docs",
         "endpoints": {
-            "mouse": ["/mouse/move", "/mouse/click", "/mouse/scroll", "/mouse/drag", "/mouse/position"],
+            "mouse": ["/mouse/move", "/mouse/click", "/mouse/down", "/mouse/up", "/mouse/scroll", "/mouse/drag", "/mouse/position"],
             "keyboard": ["/keyboard/press", "/keyboard/type", "/keyboard/hotkey", "/keyboard/down", "/keyboard/up"],
             "volume": ["/volume", "/volume (POST)", "/volume/mute"],
-            "media": ["/media/playpause"],
+            "media": ["/media/playpause", "/media/next", "/media/prev"],
             "power": ["/power/lock", "/power/sleep", "/power/shutdown", "/power/restart", "/power/cancel"],
+            "apps": ["/apps/launch"],
         },
         "platform": platform.system(),
         "volume_available": WINDOWS and _HAS_PYCAW,

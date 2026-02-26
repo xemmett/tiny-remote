@@ -18,3 +18,10 @@ certs/
 *.key
 *.crt
 *.pfx
+
+# Packaging
+pc-control/dist/
+frontend/build/
+desktop/dist-electron/
+installer/stage/
+installer/output/

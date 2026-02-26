@@ -284,6 +284,7 @@ async def mouse_position():
 # WebSocket mouse: sensitivity (swipe distance -> cursor distance) and smoothing (0=full smooth, 1=no smooth)
 MOUSE_WS_SENSITIVITY = float(os.environ.get("MOUSE_WS_SENSITIVITY", "2.2"))
 MOUSE_WS_SMOOTHING = float(os.environ.get("MOUSE_WS_SMOOTHING", "0.35"))  # exponential smoothing alpha
+MOUSE_WS_RECEIVE_TIMEOUT = float(os.environ.get("MOUSE_WS_RECEIVE_TIMEOUT", "45"))  # seconds; close if no message (client heartbeat is 12s)
 
 
 @app.websocket("/ws/mouse")
@@ -294,7 +295,13 @@ async def mouse_ws(ws: WebSocket):
     alpha = max(0.01, min(1.0, MOUSE_WS_SMOOTHING))
     try:
         while True:
-            data = await ws.receive_json()
+            try:
+                data = await asyncio.wait_for(ws.receive_json(), timeout=MOUSE_WS_RECEIVE_TIMEOUT)
+            except asyncio.TimeoutError:
+                break
+            if data.get("ping") is True:
+                await ws.send_json({"pong": True})
+                continue
             scroll = data.get("scroll")
             if scroll is not None:
                 amount = int(scroll)
@@ -523,7 +530,16 @@ async def root():
 
 
 if __name__ == "__main__":
+    import argparse
     import uvicorn
-    # Use app as string so the reloader can re-import the module (hot reload).
-    # From terminal: uvicorn main:app --reload --host 0.0.0.0 --port 8765
-    uvicorn.run("main:app", host="0.0.0.0", port=8765, reload=True)
+    parser = argparse.ArgumentParser(description="Tiny Remote FastAPI backend")
+    parser.add_argument("--port", type=int, default=8765, help="Port to bind (default 8765)")
+    parser.add_argument("--reload", action="store_true", help="Enable hot reload (dev only)")
+    args = parser.parse_args()
+    # Bind 0.0.0.0 so LAN devices (e.g. phone) can reach the API when used behind Express proxy
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=args.port,
+        reload=args.reload,
+    )

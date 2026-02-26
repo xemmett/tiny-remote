@@ -8,6 +8,7 @@
     "dev:client": "vite --host",
     "dev:server": "node server/index.js --host",
     "build": "vite build",
+    "build:exe": "npm run build && pkg server/index.js --targets node18-win-x64 --output build/frontend.exe",
     "preview": "vite preview",
     "start": "node server/index.js"
   },
@@ -24,6 +25,11 @@
     "concurrently": "^9.0.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.15",
+    "pkg": "^5.8.1",
     "vite": "^5.4.10"
+  },
+  "pkg": {
+    "scripts": "server/index.js",
+    "assets": []
   }
 }

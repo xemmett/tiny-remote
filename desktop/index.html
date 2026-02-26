@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tiny Remote</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #1a1b1e;
+      color: #e4e4e7;
+      padding: 20px;
+      min-height: 100vh;
+    }
+    h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 16px 0; color: #fafafa; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      margin-bottom: 16px;
+    }
+    .status.running { background: #166534; color: #dcfce7; }
+    .status.stopped { background: #991b1b; color: #fecaca; }
+    .status .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    .url-box {
+      background: #27272a;
+      border: 1px solid #3f3f46;
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-family: 'Consolas', monospace;
+      font-size: 0.9rem;
+      word-break: break-all;
+      margin-bottom: 12px;
+    }
+    .qr-wrap {
+      text-align: center;
+      margin: 16px 0;
+    }
+    .qr-wrap img { border-radius: 8px; background: #fff; padding: 8px; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      background: #3f3f46;
+      color: #e4e4e7;
+      margin-right: 8px;
+      margin-bottom: 8px;
+    }
+    .btn:hover { background: #52525b; }
+    .btn.primary { background: #2563eb; color: #fff; }
+    .btn.primary:hover { background: #1d4ed8; }
+    .section { margin-top: 20px; padding-top: 16px; border-top: 1px solid #3f3f46; }
+    .section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #71717a; margin-bottom: 10px; }
+    .toggle-wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .toggle { width: 44px; height: 24px; border-radius: 12px; background: #3f3f46; position: relative; cursor: pointer; flex-shrink: 0; }
+    .toggle.on { background: #2563eb; }
+    .toggle::after { content: ''; position: absolute; width: 18px; height: 18px; border-radius: 50%; background: #fff; top: 3px; left: 3px; transition: transform 0.2s; }
+    .toggle.on::after { transform: translateX(20px); }
+    .error { color: #f87171; font-size: 0.875rem; margin-top: 8px; }
+    a { color: #60a5fa; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>Tiny Remote</h1>
+  <div id="status" class="status stopped"><span class="dot"></span> Stopped</div>
+  <div id="urlBox" class="url-box" style="display: none;">—</div>
+  <div id="qrWrap" class="qr-wrap" style="display: none;"></div>
+  <div>
+    <button type="button" class="btn primary" id="copyBtn" disabled>Copy link</button>
+    <button type="button" class="btn" id="openBtn" disabled>Open on PC</button>
+    <button type="button" class="btn" id="restartBtn">Restart backend</button>
+  </div>
+  <div id="error" class="error" style="display: none;"></div>
+  <div class="section">
+    <div class="section-title">Startup</div>
+    <div class="toggle-wrap">
+      <span>Start when I log in</span>
+      <div id="startToggle" class="toggle" role="switch" aria-checked="false"></div>
+    </div>
+  </div>
+  <script>
+    const statusEl = document.getElementById('status');
+    const urlBoxEl = document.getElementById('urlBox');
+    const qrWrapEl = document.getElementById('qrWrap');
+    const copyBtn = document.getElementById('copyBtn');
+    const openBtn = document.getElementById('openBtn');
+    const restartBtn = document.getElementById('restartBtn');
+    const errorEl = document.getElementById('error');
+    const startToggle = document.getElementById('startToggle');
+
+    function setStatus(running, url, port, qrDataUrl, err) {
+      if (running) {
+        statusEl.className = 'status running';
+        statusEl.innerHTML = '<span class="dot"></span> Running';
+        urlBoxEl.textContent = url || '—';
+        urlBoxEl.style.display = 'block';
+        if (qrDataUrl) {
+          qrWrapEl.innerHTML = '<p style="margin:0 0 8px 0; font-size:0.8rem; color:#a1a1aa;">📱 Scan to open on phone</p><img src="' + qrDataUrl + '" alt="QR Code" width="200" height="200" />';
+          qrWrapEl.style.display = 'block';
+        } else {
+          qrWrapEl.style.display = 'none';
+        }
+        copyBtn.disabled = false;
+        openBtn.disabled = false;
+        copyBtn.dataset.url = url || '';
+        openBtn.dataset.url = url || '';
+        errorEl.style.display = 'none';
+      } else {
+        statusEl.className = 'status stopped';
+        statusEl.innerHTML = '<span class="dot"></span> Stopped';
+        urlBoxEl.style.display = 'none';
+        qrWrapEl.style.display = 'none';
+        copyBtn.disabled = true;
+        openBtn.disabled = true;
+        if (err) {
+          errorEl.textContent = err;
+          errorEl.style.display = 'block';
+        } else {
+          errorEl.style.display = 'none';
+        }
+      }
+    }
+
+    window.tinyRemote.onServerStatus((data) => {
+      setStatus(data.running, data.url, data.port, data.qrDataUrl, data.error);
+    });
+
+    copyBtn.addEventListener('click', async () => {
+      const url = copyBtn.dataset.url;
+      if (!url) return;
+      try {
+        await navigator.clipboard.writeText(url);
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = 'Copy link'; }, 1500);
+      } catch (_) {
+        copyBtn.textContent = 'Copy failed';
+        setTimeout(() => { copyBtn.textContent = 'Copy link'; }, 1500);
+      }
+    });
+
+    openBtn.addEventListener('click', () => {
+      const url = openBtn.dataset.url;
+      if (url) window.tinyRemote.openInBrowser(url);
+    });
+
+    restartBtn.addEventListener('click', async () => {
+      restartBtn.disabled = true;
+      restartBtn.textContent = 'Restarting…';
+      const result = await window.tinyRemote.restartServers();
+      restartBtn.disabled = false;
+      restartBtn.textContent = 'Restart backend';
+      if (result.ok) {
+        setStatus(true, result.url, result.port, result.qrDataUrl);
+      } else {
+        setStatus(false, null, null, null, result.error);
+      }
+    });
+
+    startToggle.addEventListener('click', async () => {
+      const on = startToggle.classList.toggle('on');
+      startToggle.setAttribute('aria-checked', on);
+      const result = await window.tinyRemote.setStartOnBoot(on);
+      if (!result.ok) {
+        startToggle.classList.toggle('on');
+        startToggle.setAttribute('aria-checked', !on);
+        errorEl.textContent = result.error || 'Failed';
+        errorEl.style.display = 'block';
+      }
+    });
+
+    (async () => {
+      const on = await window.tinyRemote.getStartOnBoot();
+      if (on) {
+        startToggle.classList.add('on');
+        startToggle.setAttribute('aria-checked', 'true');
+      }
+    })();
+  </script>
+</body>
+</html>

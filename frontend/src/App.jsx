@@ -3,6 +3,7 @@ import { api } from './api/client'
 import Panel from './components/Panel'
 import Btn from './components/Btn'
 import StatusBar from './components/StatusBar'
+import { useMouseWebSocket } from './hooks/useMouseWebSocket'
 
 function useStatus() {
   const [message, setMessage] = useState('')
@@ -23,7 +24,6 @@ export default function App() {
   const trackpadLast = useRef(null)
   const trackpadAccum = useRef({ dx: 0, dy: 0 })
   const trackpadRaf = useRef(null)
-  const mouseWs = useRef(null)
   // Multi-touch: pointers by id, first pointer = anchor (hold), second = drag or scroll
   const trackpadPointers = useRef(new Map())
   const trackpadGestureMode = useRef(null) // null | 'two_scroll' | 'two_select'
@@ -39,36 +39,15 @@ export default function App() {
   const wsUrl = typeof window !== 'undefined'
     ? window.location.origin.replace(/^http/, 'ws') + '/ws/mouse'
     : 'ws://localhost:8765/ws/mouse'
-  useEffect(() => {
-    const ws = new WebSocket(wsUrl)
-    mouseWs.current = ws
 
-    const onOpen = () => {
-      show('WebSocket connected successfully!', false)
-      console.log('WebSocket connected successfully!', wsUrl)
-    }
-
-    const onClose = () => {
-      mouseWs.current = null
-      setTimeout(() => {
-        if (mouseWs.current === null) {
-          const retry = new WebSocket(wsUrl)
-          mouseWs.current = retry
-          retry.addEventListener('open', onOpen)
-          retry.addEventListener('close', onClose)
-        }
-      }, 2000)
-    }
-
-    ws.addEventListener('open', onOpen)
-    ws.addEventListener('close', onClose)
-    return () => {
-      ws.removeEventListener('open', onOpen)
-      ws.removeEventListener('close', onClose)
-      ws.close()
-      mouseWs.current = null
-    }
-  }, [wsUrl])
+  const mouseWs = useMouseWebSocket(wsUrl, {
+    onOpen: () => {
+      show('WebSocket connected', false)
+    },
+    onClose: () => {
+      show('Reconnecting…', false)
+    },
+  })
 
 
   const refreshPosition = useCallback(async () => {
@@ -345,8 +324,6 @@ export default function App() {
                   <Btn onClick={() => run(() => api.keyboardHotkey(['ctrl', 'x']), 'Ctrl+X')}>Ctrl+X</Btn>
                   <Btn onClick={() => run(() => api.keyboardHotkey(['ctrl', 'z']), 'Ctrl+Z')}>Ctrl+Z</Btn>
                   <Btn onClick={() => run(() => api.keyboardHotkey(['alt', 'tab']), 'Alt+Tab')}>Alt+Tab</Btn>
-                  <Btn onClick={() => run(() => api.keyboardHotkey(['win', 'left']), 'Win+Left')}>Win+←</Btn>
-                  <Btn onClick={() => run(() => api.keyboardHotkey(['win', 'right']), 'Win+Right')}>Win+→</Btn>
                 </div>
                 <div className="flex gap-2 mt-2">
                   <input
@@ -365,6 +342,7 @@ export default function App() {
                   <Btn onClick={() => run(() => api.keyboardPress('enter'), 'Enter')}>Enter</Btn>
                   <Btn onClick={() => run(() => api.keyboardPress('escape'), 'Escape')}>Esc</Btn>
                   <Btn onClick={() => run(() => api.keyboardPress('tab'), 'Tab')}>Tab</Btn>
+                  <Btn onClick={() => run(() => api.keyboardPress('backspace'), 'Backspace')}>Backspace</Btn>
                 </div>
               </div>
               <div>
@@ -376,6 +354,27 @@ export default function App() {
                     <Btn onClick={() => run(() => api.keyboardPress('down'), 'Down')}>↓</Btn>
                     <Btn onClick={() => run(() => api.keyboardPress('right'), 'Right')}>→</Btn>
                   </div>
+                </div>
+              </div>
+              <div>
+                <div className="text-matrix-green-dim text-xs font-mono mb-1.5">Window snap</div>
+                <div className="flex flex-col items-center gap-1 w-fit">
+                  <Btn onClick={() => run(() => api.keyboardHotkey(['win', 'up']), 'Win+Up')}>Win+↑</Btn>
+                  <div className="flex gap-2">
+                    <Btn onClick={() => run(() => api.keyboardHotkey(['win', 'left']), 'Win+Left')}>Win+←</Btn>
+                    <Btn onClick={() => run(() => api.keyboardHotkey(['win', 'down']), 'Win+Down')}>Win+↓</Btn>
+                    <Btn onClick={() => run(() => api.keyboardHotkey(['win', 'right']), 'Win+Right')}>Win+→</Btn>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div className="text-matrix-green-dim text-xs font-mono mb-1.5">Browser</div>
+                <div className="flex flex-wrap gap-2">
+                  <Btn onClick={() => run(() => api.keyboardHotkey(['ctrl', 'e']), 'Ctrl+E')}>Ctrl+E</Btn>
+                  <Btn onClick={() => run(() => api.keyboardHotkey(['alt', 'left']), 'Alt+Left')}>Alt+←</Btn>
+                  <Btn onClick={() => run(() => api.keyboardHotkey(['alt', 'right']), 'Alt+Right')}>Alt+→</Btn>
+                  <Btn onClick={() => run(() => api.keyboardHotkey(['ctrl', 'w']), 'Close tab')}>Close tab</Btn>
+                  <Btn onClick={() => run(() => api.keyboardHotkey(['ctrl', 't']), 'New tab')}>New tab</Btn>
                 </div>
               </div>
               <div>

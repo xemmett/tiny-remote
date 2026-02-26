@@ -45,14 +45,21 @@ app.use('/ws', createProxyMiddleware({
 
 app.use(express.json());
 
-// In production, serve the built React app
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../dist')));
+// In production (or when packaged), serve the built React app from dist.
+// When packaged with pkg, exe dir has dist/ next to it; in dev, dist is ../dist from server/.
+const isPkg = typeof process.pkg !== 'undefined';
+const distDir = isPkg
+  ? path.join(path.dirname(process.execPath), 'dist')
+  : path.join(__dirname, '../dist');
+const isProduction = process.env.NODE_ENV === 'production' || isPkg;
+
+if (isProduction) {
+  app.use(express.static(distDir));
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../dist/index.html'));
+    res.sendFile(path.join(distDir, 'index.html'));
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`[tiny-remote proxy] http://localhost:${PORT} -> ${FASTAPI_URL}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[tiny-remote proxy] http://0.0.0.0:${PORT} -> ${FASTAPI_URL}`);
 });

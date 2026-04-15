@@ -9,6 +9,7 @@ import { MediaPanel } from "./components/MediaPanel";
 import { PowerPanel } from "./components/PowerPanel";
 import { DeviceList } from "./components/DeviceList";
 import { SessionStatus } from "./components/SessionStatus";
+import { ScreenCast } from "./components/ScreenCast";
 
 type PairingState =
   | null
@@ -113,6 +114,11 @@ export default function App() {
         </div>
       ) : (
         <div className="mt-6 grid gap-4 md:grid-cols-2">
+          <div className="md:col-span-2">
+            <Card title="SCREEN">
+              <ScreenCast />
+            </Card>
+          </div>
           <Card title="MOUSE">
             <MousePad api={api} />
           </Card>

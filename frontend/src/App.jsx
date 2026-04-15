@@ -3,6 +3,7 @@ import { api } from './api/client'
 import Panel from './components/Panel'
 import Btn from './components/Btn'
 import StatusBar from './components/StatusBar'
+import ScreenCast from './components/ScreenCast'
 import { useMouseWebSocket } from './hooks/useMouseWebSocket'
 
 function useStatus() {
@@ -274,6 +275,10 @@ export default function App() {
         </header>
 
         <div className="grid gap-6 sm:grid-cols-2">
+          {/* Screen cast — full width */}
+          <div className="sm:col-span-2">
+            <ScreenCast />
+          </div>
           {/* Mouse */}
           <Panel title="Mouse">
             <div className="space-y-4">

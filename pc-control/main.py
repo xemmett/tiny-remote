@@ -3,15 +3,36 @@ FastAPI server for remote PC control: mouse, keyboard, volume, power.
 Designed to run on the same machine you want to control (e.g. your desktop).
 """
 import asyncio
+import io
+import logging
 import os
 import platform
 import subprocess
+import time
 import webbrowser
 from contextlib import asynccontextmanager
 
+logger = logging.getLogger(__name__)
+
 import pyautogui
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+# Optional: PIL for resizing screen frames
+try:
+    from PIL import Image
+    _HAS_PIL = True
+except ImportError:
+    _HAS_PIL = False
+
+# Screen capture: use mss (no Pillow/PyScreeze required); optional PIL for resize
+try:
+    import mss
+    import mss.tools
+    _HAS_MSS = True
+except ImportError:
+    _HAS_MSS = False
 
 # Disable pyautogui fail-safe (moving mouse to corner) for remote control
 pyautogui.FAILSAFE = False
@@ -328,6 +349,122 @@ async def mouse_ws(ws: WebSocket):
             pass
 
 
+# --- Screen sharing (cast desktop to phone) ---
+
+SCREEN_WS_FPS = float(os.environ.get("SCREEN_WS_FPS", "8"))
+
+
+@app.get("/screen/monitors")
+async def screen_monitors():
+    """Return number of monitors (0 = all, 1 = first, 2 = second, ...). For UI to bound left/right."""
+    if not _HAS_MSS:
+        return {"count": 1}
+    with mss.mss() as sct:
+        return {"count": len(sct.monitors)}
+
+
+SCREEN_WS_MAX_WIDTH = int(os.environ.get("SCREEN_WS_MAX_WIDTH", "1280"))
+SCREEN_WS_JPEG_QUALITY = int(os.environ.get("SCREEN_WS_JPEG_QUALITY", "60"))
+
+
+def _capture_frame_sync(monitor_index: int, max_width: int, quality: int) -> bytes:
+    """Capture screen as PNG (or JPEG if PIL available). Uses mss to avoid Pillow/PyScreeze. Run in thread (blocking)."""
+    if _HAS_MSS:
+        with mss.mss() as sct:
+            monitors = sct.monitors
+            idx = max(0, min(monitor_index, len(monitors) - 1))
+            monitor = monitors[idx]
+            shot = sct.grab(monitor)
+            # mss.tools.to_png(rgb, size) returns bytes when output=None
+            raw = mss.tools.to_png(shot.rgb, shot.size)
+        if _HAS_PIL and max_width > 0 and shot.width > max_width:
+            img = Image.open(io.BytesIO(raw))
+            ratio = max_width / img.width
+            new_size = (max_width, int(img.height * ratio))
+            resample = getattr(Image, "Resampling", None)
+            lanczos = Image.Resampling.LANCZOS if resample is not None else getattr(Image, "LANCZOS", Image.BICUBIC)
+            img = img.resize(new_size, lanczos)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
+            return buf.getvalue()
+        return raw
+    # Fallback: PyAutoGUI (requires PyScreeze/Pillow)
+    img = pyautogui.screenshot()
+    if _HAS_PIL and max_width > 0 and img.width > max_width:
+        ratio = max_width / img.width
+        new_size = (max_width, int(img.height * ratio))
+        resample = getattr(Image, "Resampling", None)
+        lanczos = Image.Resampling.LANCZOS if resample is not None else getattr(Image, "LANCZOS", Image.BICUBIC)
+        img = img.resize(new_size, lanczos)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
+@app.websocket("/ws/screen")
+async def screen_ws(ws: WebSocket):
+    """Stream desktop screen as JPEG frames over WebSocket. Query params: fps, width, quality, monitor (0=all, 1=first, 2=second, ...)."""
+    await ws.accept()
+    fps = SCREEN_WS_FPS
+    max_width = SCREEN_WS_MAX_WIDTH
+    quality = SCREEN_WS_JPEG_QUALITY
+    monitor_index = 0
+    try:
+        q = ws.query_params
+        if "fps" in q:
+            fps = max(1, min(30, float(q["fps"])))
+        if "width" in q:
+            max_width = max(320, min(1920, int(q["width"])))
+        if "quality" in q:
+            quality = max(10, min(100, int(q["quality"])))
+        if "monitor" in q:
+            monitor_index = max(0, int(q["monitor"]))
+    except (ValueError, KeyError):
+        pass
+    interval = 1.0 / fps
+    try:
+        while True:
+            t0 = time.monotonic()
+            frame = await asyncio.to_thread(_capture_frame_sync, monitor_index, max_width, quality)
+            await ws.send_bytes(frame)
+            elapsed = time.monotonic() - t0
+            await asyncio.sleep(max(0, interval - elapsed))
+    except WebSocketDisconnect:
+        logger.debug("Screen WebSocket client disconnected")
+    except Exception as e:
+        logger.exception("Screen WebSocket error: %s", e)
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
+@app.get("/screen/stream")
+async def screen_stream_mjpeg(request: Request):
+    """MJPEG stream for viewing in browser (e.g. new tab / fullscreen). Query param: monitor (0=all, 1=first, ...)."""
+    try:
+        monitor_index = max(0, int(request.query_params.get("monitor", 0)))
+    except (ValueError, TypeError):
+        monitor_index = 0
+
+    async def stream():
+        interval = 1.0 / 8
+        while True:
+            t0 = time.monotonic()
+            frame = await asyncio.to_thread(
+                _capture_frame_sync, monitor_index, SCREEN_WS_MAX_WIDTH, SCREEN_WS_JPEG_QUALITY
+            )
+            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+            elapsed = time.monotonic() - t0
+            await asyncio.sleep(max(0, interval - elapsed))
+
+    return StreamingResponse(
+        stream(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
 # --- Keyboard ---
 
 @app.post("/keyboard/press")
@@ -523,6 +660,7 @@ async def root():
             "media": ["/media/playpause", "/media/next", "/media/prev"],
             "power": ["/power/lock", "/power/sleep", "/power/shutdown", "/power/restart", "/power/cancel"],
             "apps": ["/apps/launch"],
+            "screen": ["/ws/screen (WebSocket stream)"],
         },
         "platform": platform.system(),
         "volume_available": WINDOWS and _HAS_PYCAW,
